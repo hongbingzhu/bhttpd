@@ -9,9 +9,9 @@
 #include "httplibs.h"
 
 struct serv_conf {
-    char* port;
-    char* pub_dir;
-    char* default_page;
+	char* port;
+	char* pub_dir;
+	char* default_page;
 };
 
 int init_conf(struct serv_conf* conf);

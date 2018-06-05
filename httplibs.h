@@ -19,23 +19,23 @@
 #include "netlibs.h"
 
 struct mime {
-    char *ext;
-    char *type;
-    struct mime *next;
-    struct mime *next_level;
-}; 
+	char *ext;
+	char *type;
+	struct mime *next;
+	struct mime *next_level;
+};
 
 struct cgi {
-    char *ext;
-    char *cmd;
-    struct cgi *next;
+	char *ext;
+	char *cmd;
+	struct cgi *next;
 };
 
 struct request {
-    int type;
-    char * uri;
-    char * local_path;
-    char * query_string;
+	int type;
+	char * uri;
+	char * local_path;
+	char * query_string;
 };
 
 int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl, const char *path_prefix, const char *default_page, const int sockfd);
