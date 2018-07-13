@@ -1,50 +1,82 @@
+#include "const.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <time.h>
+
+#include "strlibs.h"
+#include "netlibs.h"
 #include "httplibs.h"
 
-int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl, const char *path_prefix, const char *default_page, const int sockfd)
+static int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockfd);
+
+static int parse_request_type(const char *buf);
+static char * find_content_type(const struct mime *tbl, const char *ext);
+static char * find_cgi_command(const struct cgi *tbl, const char *ext);
+static char * determine_ext(const char *path);
+static int build_cgi_env(const struct request *req);
+// if have '?' in request uri
+static char * has_query_string(const char *uri);
+
+int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl,
+		const char *path_prefix, const char *default_page, const int sockfd)
 {
 	char buf[BUFFER_SIZE], local_path[BUFFER_SIZE];
 	char basic_request[3][BUFFER_SIZE], *content_type = 0, *query = 0;
 	struct request req;
+	int type = 0, line_len, i;
 	static time_t t;
 	t = time(0);
 	memset(buf, 0, sizeof buf);
 	memset(local_path, 0, sizeof local_path);
 	memset(&req, 0, sizeof(struct request));
 
-	read_line(buf, sockfd);
-	sscanf(buf, "%s %s %s", basic_request[METHOD], basic_request[PATH], basic_request[PROC]);
+	if ((line_len = read_line(buf, sizeof(buf), sockfd)) > 0) {
+		sscanf(buf, "%s %s %s", basic_request[METHOD], basic_request[PATH], basic_request[PROC]);
 
-	const int type = parse_request_type(basic_request[METHOD]);
+		type = parse_request_type(basic_request[METHOD]);
 
-	query = has_query_string(basic_request[PATH]);
-	if (query) {
-		*query = 0;
-		++query;
+		query = has_query_string(basic_request[PATH]);
+		if (query) {
+			*query = 0;
+			++query;
+		}
+
+		/* Add default page */
+		if (strlen(basic_request[PATH]) == 1 && basic_request[PATH][0] == '/') {
+			strcat(basic_request[PATH], default_page);
+		}
+
+		strncat(local_path, path_prefix, BUFFER_SIZE - 1);
+		strncat(local_path, basic_request[PATH], BUFFER_SIZE - 1);
+
+		req.type = type;
+		req.uri = basic_request[PATH];
+		req.local_path = local_path;
+		req.query_string = query;
+
+		fprintf(stderr, "[%s] %s %s, type=%d\n", str_strip_tail(ctime(&t)), basic_request[METHOD], basic_request[PATH], type);
+	} else if (line_len == 0) {
+		return -1;
+	} else {
+		fprintf(stderr, "read_line() get length %d. Leading 8 bytes is", line_len);
+		for (i = 0; i < 8; i++) fprintf(stderr, " %02x", buf[i]);
+		fprintf(stderr, "\n");
 	}
-
-	/* Add default page */
-	if (strlen(basic_request[PATH]) == 1 && basic_request[PATH][0] == '/') {
-		strcat(basic_request[PATH], default_page);
-	}
-
-	strncat(local_path, path_prefix, BUFFER_SIZE - 1);
-	strncat(local_path, basic_request[PATH], BUFFER_SIZE - 1);
-
-	req.type = type;
-	req.uri = basic_request[PATH];
-	req.local_path = local_path;
-	req.query_string = query;
-
-	fprintf(stderr, "[%s] %s %s\n", str_strip(ctime(&t)), basic_request[METHOD], basic_request[PATH]);
 
 	write_socket(STR_PROC, strlen(STR_PROC), sockfd);
 	if (type == GET) {
 		FILE *fp = fopen(local_path, "r");
 		if (fp == 0) {
-			/* File doesn't exist */
+			// File doesn't exist
 			write_socket(RES_404, strlen(RES_404), sockfd);
 			write_socket("\r\n", 2, sockfd);
 		} else {
+			fclose(fp);
 			write_socket(RES_200, strlen(RES_200), sockfd);
 			if (handle_cgi(&req, cgi_tbl, sockfd) == 0) {
 				content_type = find_content_type(mime_tbl, determine_ext(req.local_path));
@@ -53,11 +85,11 @@ int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl, const
 				write_socket("\r\n", 2, sockfd);
 				write_socket("\r\n", 2, sockfd);
 				send_file(local_path, sockfd);
+				write_socket("\r\n", 2, sockfd);
 			}
 		}
-		fclose(fp);
 	} else if (type == POST) {
-		if (handle_cgi(&req, cgi_tbl, sockfd) == 0) {
+		if (handle_cgi(&req, cgi_tbl, sockfd) <= 0) {
 			return -1;
 		}
 	} else {
@@ -68,7 +100,7 @@ int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl, const
 	return 0;
 }
 
-int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockfd)
+static int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockfd)
 {
 	char *cmd;
 	char buf[BUFFER_SIZE];
@@ -109,7 +141,7 @@ int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockf
 			int len;
 			while ((len = read(cp[0], buf, BUFFER_SIZE)) > 0) {
 				buf[len] = '\0';
-				str_strip(buf);
+				str_strip_tail(buf);
 				len = strlen(buf);
 				write_socket(buf, len, sockfd);
 			}
@@ -122,13 +154,13 @@ int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockf
 		write_socket(RES_200, strlen(RES_200), sockfd);
 		memset(buf, 0, sizeof buf);
 
-		while (read_line(buf, sockfd)) {
+		while (read_line(buf, sizeof(buf), sockfd)) {
 			if (buf[0] == '\r') break;
 			char *ptr = buf;
 			while (*ptr != ':') ++ptr;
 			*ptr = 0;
 			if (strcmp("Content-Type", buf) == 0) {
-				setenv("CONTENT_TYPE", str_strip(ptr += 2), 1);
+				setenv("CONTENT_TYPE", str_strip_tail(ptr += 2), 1);
 			}
 			memset(buf, 0, sizeof buf);
 		}
@@ -169,7 +201,7 @@ int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockf
 			int len;
 			while ((len = read(cp[0], buf, BUFFER_SIZE)) > 0) {
 				buf[len] = '\0';
-				str_strip(buf);
+				str_strip_tail(buf);
 				len = strlen(buf);
 				write_socket(buf, len, sockfd);
 			}
@@ -184,7 +216,7 @@ int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockf
 	return 1;
 }
 
-int parse_request_type(const char *buf)
+static int parse_request_type(const char *buf)
 {
 	if (strcmp(buf, "GET") == 0) {
 		return GET;
@@ -196,12 +228,14 @@ int parse_request_type(const char *buf)
 
 struct mime * init_mime_table()
 {
+	// Base items for root, level 1, level 2
+	static struct mime s_baseItems[1+26+26*26];
+
 	char buf[BUFFER_SIZE], ext[BUFFER_SIZE], type[BUFFER_SIZE];
-	struct mime *ptr = 0, *root = 0;
+	struct mime item;
+	struct mime *root = 0;
 	FILE *fp = fopen("mime.types", "r");
 	int i;
-
-	memset(buf, 0, sizeof buf);
 
 	if (fp == 0) {
 		fprintf(stderr, "Cannot open mime.types\n");
@@ -210,42 +244,36 @@ struct mime * init_mime_table()
 	}
 
 	/* Initialize two-level structure */
-	root = (struct mime*) malloc(sizeof(struct mime));
-	memset(root, 0, sizeof(struct mime));
-	root->next_level = (struct mime*) malloc(sizeof(struct mime) * 26);
-	memset(root->next_level, 0, sizeof(struct mime) * 26);
-	for (i = 0; i < 26; i++) {
-		root->next_level[i].next_level = (struct mime*) malloc(sizeof(struct mime) * 26);
-		memset(root->next_level[i].next_level, 0, sizeof(struct mime) * 26);
-	}
+	memset(s_baseItems, 0, sizeof(s_baseItems));
+	root = &s_baseItems[0];
+	root->next_level = &s_baseItems[1];
+	for (i = 0; i < 26; i++)
+		root->next_level[i].next_level = &s_baseItems[1+26+26*i];
 
+	memset(buf, 0, sizeof buf);
 	while (fgets(buf, BUFFER_SIZE, fp) != 0) {
 		sscanf(buf, "%s %s", ext, type);
 
 		/* Create new node in advance */
-		ptr = (struct mime*) malloc(sizeof(struct mime));
-		memset(ptr, 0, sizeof(struct mime));
-		ptr->ext = (char*) malloc(sizeof(char) * (strlen(ext) + 1));
-		ptr->type = (char*) malloc(sizeof(char) * (strlen(type) + 1));
-		strncat(ptr->ext, ext, strlen(ext));
-		strncat(ptr->type, type, strlen(type));
+		memset(&item, 0, sizeof(struct mime));
+		item.ext = (char*) malloc(sizeof(char) * (strlen(ext) + 1));
+		item.type = (char*) malloc(sizeof(char) * (strlen(type) + 1));
+		strcpy(item.ext, ext);
+		strcpy(item.type, type);
 
-		struct mime *first_level = &(root->next_level[ext[0] - 'a']);
-		struct mime *second_level = &(first_level->next_level[ext[1] - 'a']);
-		struct mime *start = (strlen(ext) == 1) ? first_level : second_level;
+		struct mime *level1 = &(root->next_level[ext[0] - 'a']);
+		struct mime *start = (strlen(ext) == 1) ? level1 :
+				&(level1->next_level[ext[1] - 'a']);
 
 		if (start->ext == 0) {
 			/* Use existing node if the node is empty */
-			start->ext = (char*) malloc(sizeof(char) * (strlen(ext) + 1));
-			memset(start->ext, 0, sizeof(char) * (strlen(ext) + 1));
-			start->type = (char*) malloc(sizeof(char) * (strlen(type) + 1));
-			memset(start->type, 0, sizeof(char) * (strlen(type) + 1));
-			strncat(start->ext, ext, strlen(ext));
-			strncat(start->type, type, strlen(type));
-			free(ptr);
+			start->ext = item.ext;
+			start->type = item.type;
 		} else {
 			/* Append previously created node to last */
 			while (start->next != 0) start = start->next;
+			struct mime *ptr = (struct mime*) malloc(sizeof(struct mime));
+			*ptr = item;
 			start->next = ptr;
 		}
 		memset(buf, 0, sizeof buf);
@@ -255,7 +283,7 @@ struct mime * init_mime_table()
 	return root;
 }
 
-char * find_content_type(const struct mime *tbl, const char *ext)
+static char * find_content_type(const struct mime *tbl, const char *ext)
 {
 	struct mime *first_level = &(tbl->next_level[ext[0] - 'a']);
 	struct mime *second_level = &(first_level->next_level[ext[1] - 'a']);
@@ -270,7 +298,7 @@ char * find_content_type(const struct mime *tbl, const char *ext)
 	return 0;
 }
 
-char * find_cgi_command(const struct cgi *tbl, const char *ext)
+static char * find_cgi_command(const struct cgi *tbl, const char *ext)
 {
 	while (tbl != 0) {
 		if (strcmp(tbl->ext, ext) == 0) return tbl->cmd;
@@ -279,7 +307,7 @@ char * find_cgi_command(const struct cgi *tbl, const char *ext)
 	return 0;
 }
 
-char * determine_ext(const char *path)
+static char * determine_ext(const char *path)
 {
 	const int len = strlen(path);
 	path += len - 1;
@@ -288,7 +316,7 @@ char * determine_ext(const char *path)
 	return (char*)(path + 1);
 }
 
-int build_cgi_env(const struct request *req)
+static int build_cgi_env(const struct request *req)
 {
 	const char* local_path = req->local_path;
 	const char* uri = req->uri;
@@ -311,7 +339,7 @@ int build_cgi_env(const struct request *req)
 	return 0;
 }
 
-char * has_query_string(const char *uri)
+static char * has_query_string(const char *uri)
 {
 	while (*uri != 0) {
 		if (*uri == '?') return (char *) uri;
@@ -321,42 +349,27 @@ char * has_query_string(const char *uri)
 	return 0;
 }
 
-char * str_strip(char *str)
-{
-	char *ptr = str;
-	while (*ptr != 0) ptr++;
-	--ptr;
-	while ((isspace(*ptr))) {
-		*ptr = 0;
-		ptr--;
-	}
-	return str;
-}
-
 struct cgi * init_cgi_table()
 {
-	char buf[BUFFER_SIZE], key[BUFFER_SIZE], val[BUFFER_SIZE];
+	char buf[BUFFER_SIZE];
 	struct cgi *ptr = 0, *root = 0;
-	FILE *fp = fopen("cgi.conf", "r");
+	FILE *fp;
 
-	memset(buf, 0, sizeof buf);
-
-	if (fp == 0) {
+	if ((fp = fopen("cgi.conf", "r")) == 0) {
 		fprintf(stderr, "Cannot open cgi.conf\n");
-		fclose(fp);
 		return 0;
 	}
 
 	while (fgets(buf, BUFFER_SIZE, fp) != 0) {
-		str_strip(buf);
+		str_strip_tail(buf);
 		if (strcmp("[CGI]", buf) != 0) {
 			return 0;
 		}
 		int i;
-		if (ptr == 0) {
+		if (ptr == 0) {		// first item, assign as root
 			ptr = (struct cgi*) malloc(sizeof(struct cgi));
 			root = ptr;
-		} else {
+		} else {			// else, chain to tail
 			ptr->next = (struct cgi*) malloc(sizeof(struct cgi));
 			ptr = ptr->next;
 		}
@@ -366,18 +379,18 @@ struct cgi * init_cgi_table()
 				free(ptr);
 				return 0;
 			}
-			sscanf(buf, "%s %s", key, val);
+			char *kvp[2];
+			str_split(buf, ' ', kvp, 2);
+			str_strip_tail(kvp[1]);
 
-			if (strcmp("EXTNAME", key) == 0) {
-				ptr->ext = (char*) malloc(sizeof(char) * (strlen(val) + 1));
-				memset(ptr->ext, 0, sizeof(char) * (strlen(val) + 1));
-				strncat(ptr->ext, val, strlen(val));
-			} else if (strcmp("CMD", key) == 0) {
-				ptr->cmd = (char*) malloc(sizeof(char) * (strlen(val) + 1));
-				memset(ptr->cmd, 0, sizeof(char) * (strlen(val) + 1));
-				strncat(ptr->cmd, val, strlen(val));
+			int val_len = strlen(kvp[1]) + 1;
+			if (strcmp("EXTNAME", kvp[0]) == 0) {
+				ptr->ext = (char*) malloc(sizeof(char) * val_len);
+				strncpy(ptr->ext, kvp[1], val_len);
+			} else if (strcmp("CMD", kvp[0]) == 0) {
+				ptr->cmd = (char*) malloc(sizeof(char) * val_len);
+				strncpy(ptr->cmd, kvp[1], val_len);
 			}
-			memset(buf, 0, sizeof buf);
 		}
 	}
 

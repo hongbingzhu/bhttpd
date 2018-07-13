@@ -1,16 +1,36 @@
-#include "bhttpd.h"
+#include "const.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <unistd.h>
+#include <signal.h>
+#include <poll.h>
+
+#include "strlibs.h"
+#include "netlibs.h"
+#include "httplibs.h"
+
+struct serv_conf {
+	char* port;
+	char* pub_dir;
+	char* default_page;
+};
+
+static int init_conf(struct serv_conf* conf);
 
 int main(int argc, char **argv)
 {
-	const int POLL_MAX = sysconf(_SC_OPEN_MAX);
+	const int POLL_MAX = 32;//sysconf(_SC_OPEN_MAX);
 	struct pollfd fds[POLL_MAX];
-	int sockfd, clifd, polled = 0, i;
+	int sockfd, clifd, polled = 0, i, len;
 	struct serv_conf conf;
 	struct mime * mime_tbl;
 	struct cgi * cgi_tbl;
 	struct addrinfo *info;
 	struct sockaddr_storage cli_addr;
 	socklen_t addr_size;
+	char buff[1024];
 
 	init_conf(&conf);
 	init_info(conf.port, &info);
@@ -34,7 +54,7 @@ int main(int argc, char **argv)
 		}
 
 		if (fds[0].revents & POLLRDNORM) {
-			/* Handle new connection */
+			// Handle new connection
 			clifd = accept(sockfd, (struct sockaddr *) &cli_addr, &addr_size);
 			for (i = 1; i < POLL_MAX; i++) {
 				if (fds[i].fd == -1) {
@@ -48,6 +68,8 @@ int main(int argc, char **argv)
 		for (i = 1; i < POLL_MAX; i++) {
 			if (fds[i].fd != -1 && (fds[i].revents & POLLRDNORM)) {
 				handle_request(mime_tbl, cgi_tbl, conf.pub_dir, conf.default_page, fds[i].fd);
+				shutdown(fds[i].fd, SHUT_WR);
+				while ((len = recv(fds[i].fd, buff, sizeof(buff), 0)) > 0) fprintf(stderr, "recv before close get %d.\n", len);
 				close(fds[i].fd);
 				fds[i].fd = -1;
 				--polled;
@@ -58,49 +80,34 @@ int main(int argc, char **argv)
 	return 0;
 }
 
-int init_conf(struct serv_conf* conf)
+static int init_conf(struct serv_conf* conf)
 {
 	FILE* fp;
-	int val_len = 0;
 	char buf[BUFFER_SIZE];
-	char param_name[BUFFER_SIZE];
-	char param_val[BUFFER_SIZE];
-
-	memset(buf, 0, sizeof(buf));
-	memset(param_name, 0, sizeof(param_name));
-	memset(param_val, 0, sizeof(param_val));
 
 	if ((fp = fopen("serv.conf", "r")) == 0) {
 		fprintf(stderr, "Could not read configuration file\n");
 		return -1;
 	}
 
-	while (fgets(buf, BUFFER_SIZE, fp) != 0) {
-		char *ptr = buf;
-		char *to_ptr = param_name;
-		while (*ptr != ' ') *to_ptr++ = *ptr++;
-		while (*ptr == ' ' || *ptr == '\t') ++ptr;
-		to_ptr = param_val;
-		while (*ptr != 0 && *ptr != '\n') *to_ptr++ = *ptr++;
-		val_len = strlen(param_val) + 1;
+	while (fgets(buf, BUFFER_SIZE, fp) != 0) {	// read a line, and append '\0'
+		char *kvp[2];
+		str_split(buf, ' ', kvp, 2);
+		str_strip_tail(kvp[1]);
+		int val_len = strlen(kvp[1]) + 1;
 
-		if (strcmp("PORT", param_name) == 0) {
-			conf->port = (char*) malloc(sizeof(char) * val_len);
-			memset(conf->port, 0, sizeof(char)*val_len);
-			strncpy(conf->port, param_val, val_len);
-		} else if (strcmp("DIRECTORY", param_name) == 0) {
-			conf->pub_dir = (char*) malloc(sizeof(char) * val_len);
-			memset(conf->pub_dir, 0, sizeof(char)*val_len);
-			strncpy(conf->pub_dir, param_val, val_len);
-		} else if (strcmp("DEFAULT_PAGE", param_name) == 0) {
-			conf->default_page = (char*) malloc(sizeof(char) * val_len);
-			memset(conf->default_page, 0, sizeof(char)*val_len);
-			strncpy(conf->default_page, param_val, val_len);
+		char** pptr_conf = NULL;
+		if (strcmp("PORT", kvp[0]) == 0) {
+			pptr_conf = &conf->port;
+		} else if (strcmp("DIRECTORY", kvp[0]) == 0) {
+			pptr_conf = &conf->pub_dir;
+		} else if (strcmp("DEFAULT_PAGE", kvp[0]) == 0) {
+			pptr_conf = &conf->default_page;
 		}
-
-		memset(buf, 0, sizeof buf);
-		memset(param_name, 0, sizeof param_name);
-		memset(param_val, 0, sizeof param_val);
+		if (pptr_conf) {
+			*pptr_conf = (char*) malloc(sizeof(char) * val_len);
+			strncpy(*pptr_conf, kvp[1], val_len);
+		}
 	}
 	return 0;
 }

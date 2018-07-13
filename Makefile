@@ -1,8 +1,8 @@
 CC=gcc
-OPTS=-o bhttpd
-OBJ=bhttpd.c netlibs.c httplibs.c
+OPTS=-Wall -g -O0 -o bhttpd
+SRCS=bhttpd.c netlibs.c httplibs.c strlibs.c
 
 all:
-	$(CC) $(OBJ) $(OPTS)
+	$(CC) $(SRCS) $(OPTS)
 clean:
 	rm bhttpd

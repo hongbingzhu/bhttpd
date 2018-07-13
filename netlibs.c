@@ -1,3 +1,13 @@
+#include "const.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
 #include "netlibs.h"
 
 int init_info(const char* port, struct addrinfo** serv)
@@ -50,7 +60,6 @@ int send_file(const char *file_path, const int sockfd)
 	char rbuf[BUFFER_SIZE];
 	FILE *fp = 0;
 
-	memset(rbuf, 0, sizeof rbuf);
 	if ((fp = fopen(file_path, "r")) == 0) {
 		fprintf(stderr, "Could not open file: %s\n", file_path);
 		return -1;
@@ -58,18 +67,18 @@ int send_file(const char *file_path, const int sockfd)
 
 	while (!feof(fp) && (read = fread(rbuf, 1, BUFFER_SIZE, fp))) {
 		write_socket(rbuf, read, sockfd);
-		memset(rbuf, 0, sizeof rbuf);
 		len += read;
 	}
 
 	fclose(fp);
+	fprintf(stderr, "Send file %s with length %d\n", file_path, len);
 	return len;
 }
 
-int read_line(char *buf, const int sockfd)
+int read_line(char *buf, int max_len, const int sockfd)
 {
-	int stat = 0;
-	while (1) {
+	int stat = 0, len = 0;
+	while (len < max_len) {
 		stat = read_socket(buf, 1, sockfd);
 		if (stat == 0) return stat;
 		if (*buf == '\n') {
@@ -77,8 +86,9 @@ int read_line(char *buf, const int sockfd)
 			return stat;
 		}
 		++buf;
+		++len;
 	}
-	return stat;
+	return -1;
 }
 
 int write_socket(const char *buf, const int len, const int sockfd)
@@ -92,5 +102,5 @@ int write_socket(const char *buf, const int len, const int sockfd)
 
 int read_socket(char *buf, int len, const int sockfd)
 {
-	return recv(sockfd, buf, len, 0);
+	return recv(sockfd, buf, len, MSG_WAITALL);
 }

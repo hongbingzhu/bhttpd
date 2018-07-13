@@ -1,22 +1,16 @@
 #ifndef HTTPLIBS_H
+#define HTTPLIBS_H
+
 #define METHOD 0
 #define PATH 1
 #define PROC 2
 #define GET 13
 #define STR_PROC "HTTP/1.1 "
-#define RES_200 "200 OK\n"
-#define RES_400 "400 Bad Request\n"
-#define RES_404 "404 Not Found\n"
+#define RES_200 "200 OK\r\n"
+#define RES_400 "400 Bad Request\r\n"
+#define RES_404 "404 Not Found\r\n"
 #define FLD_CONTENT_TYPE "Content-Type: "
 #define POST 14
-#include "const.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <ctype.h>
-#include <time.h>
-#include "netlibs.h"
 
 struct mime {
 	char *ext;
@@ -39,14 +33,7 @@ struct request {
 };
 
 int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl, const char *path_prefix, const char *default_page, const int sockfd);
-int handle_cgi(const struct request *req, const struct cgi *cgi, const int sockfd);
-int parse_request_type(const char *buf);
 struct mime * init_mime_table();
-char * find_content_type(const struct mime *tbl, const char *ext);
-char * find_cgi_command(const struct cgi *tbl, const char *ext);
-char * determine_ext(const char *path);
-int build_cgi_env(const struct request *req);
-char * has_query_string(const char *uri);
-char * str_strip(char *str);
 struct cgi * init_cgi_table();
-#endif
+
+#endif	// HTTPLIBS_H
