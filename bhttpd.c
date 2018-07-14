@@ -19,9 +19,11 @@ struct serv_conf {
 
 static int init_conf(struct serv_conf* conf);
 
-int main(int argc, char **argv)
+int main(void)
 {
-	const int POLL_MAX = 32;//sysconf(_SC_OPEN_MAX);
+	// In ubuntu 16.04, sysconf(_SC_OPEN_MAX) return 0x100000. too large for
+	// program stack. for we are BASIC httpd, a small value 32 should enough.
+	const int POLL_MAX = 32; //sysconf(_SC_OPEN_MAX);
 	struct pollfd fds[POLL_MAX];
 	int sockfd, clifd, polled = 0, i, len;
 	struct serv_conf conf;

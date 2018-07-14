@@ -1,5 +1,5 @@
 CC=gcc
-OPTS=-Wall -g -O0 -o bhttpd
+OPTS=-Wall -Wextra -std=gnu99 -g -O0 -o bhttpd
 SRCS=bhttpd.c netlibs.c httplibs.c strlibs.c
 
 all:

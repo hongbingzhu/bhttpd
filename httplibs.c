@@ -22,15 +22,16 @@ static int build_cgi_env(const struct request *req);
 // if have '?' in request uri
 static char * has_query_string(const char *uri);
 
+#define DEBUG(...)		fprintf(stderr, __VA_ARGS__)
+#define MIN(a,b)		((a) < (b) ? (a) : (b))
+
 int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl,
 		const char *path_prefix, const char *default_page, const int sockfd)
 {
 	char buf[BUFFER_SIZE], local_path[BUFFER_SIZE];
 	char basic_request[3][BUFFER_SIZE], *content_type = 0, *query = 0;
 	struct request req;
-	int type = 0, line_len, i;
-	static time_t t;
-	t = time(0);
+	int type = 0, line_len;
 	memset(buf, 0, sizeof buf);
 	memset(local_path, 0, sizeof local_path);
 	memset(&req, 0, sizeof(struct request));
@@ -59,13 +60,15 @@ int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl,
 		req.local_path = local_path;
 		req.query_string = query;
 
-		fprintf(stderr, "[%s] %s %s, type=%d\n", str_strip_tail(ctime(&t)), basic_request[METHOD], basic_request[PATH], type);
+		//const time_t t = time(0);
+		//DEBUG("[%s] %s %s, type=%d\n", ctime(&t), basic_request[METHOD], basic_request[PATH], type);
 	} else if (line_len == 0) {
 		return -1;
 	} else {
-		fprintf(stderr, "read_line() get length %d. Leading 8 bytes is", line_len);
-		for (i = 0; i < 8; i++) fprintf(stderr, " %02x", buf[i]);
-		fprintf(stderr, "\n");
+		//DEBUG("read_line() get length %d. Leading n(<=8) bytes is", line_len);
+		//for (int i = 0; i < MIN(8,line_len); i++) DEBUG(" %02x", buf[i]);
+		//DEBUG("\n");
+		return -1;
 	}
 
 	write_socket(STR_PROC, strlen(STR_PROC), sockfd);
@@ -75,18 +78,19 @@ int handle_request(const struct mime *mime_tbl, const struct cgi *cgi_tbl,
 			// File doesn't exist
 			write_socket(RES_404, strlen(RES_404), sockfd);
 			write_socket("\r\n", 2, sockfd);
-		} else {
-			fclose(fp);
-			write_socket(RES_200, strlen(RES_200), sockfd);
-			if (handle_cgi(&req, cgi_tbl, sockfd) == 0) {
-				content_type = find_content_type(mime_tbl, determine_ext(req.local_path));
-				write_socket(FLD_CONTENT_TYPE, strlen(FLD_CONTENT_TYPE), sockfd);
-				write_socket(content_type, strlen(content_type), sockfd);
-				write_socket("\r\n", 2, sockfd);
-				write_socket("\r\n", 2, sockfd);
-				send_file(local_path, sockfd);
-				write_socket("\r\n", 2, sockfd);
-			}
+			return 0;
+		}
+		fclose(fp);
+
+		write_socket(RES_200, strlen(RES_200), sockfd);
+		if (handle_cgi(&req, cgi_tbl, sockfd) == 0) {
+			content_type = find_content_type(mime_tbl, determine_ext(req.local_path));
+			write_socket(FLD_CONTENT_TYPE, strlen(FLD_CONTENT_TYPE), sockfd);
+			write_socket(content_type, strlen(content_type), sockfd);
+			write_socket("\r\n", 2, sockfd);
+			write_socket("\r\n", 2, sockfd);
+			send_file(local_path, sockfd);
+			write_socket("\r\n", 2, sockfd);
 		}
 	} else if (type == POST) {
 		if (handle_cgi(&req, cgi_tbl, sockfd) <= 0) {
